@@ -1,0 +1,30 @@
+# --- credentials (NEVER commit) ---
+creds.json
+service_account.json
+*.key.json
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+.uv/
+
+# --- uv ---
+uv.lock
+
+# --- test & coverage ---
+.pytest_cache/
+.coverage
+htmlcov/
+
+# --- editors ---
+.vscode/
+.idea/
+*.swp
+
+# --- OS ---
+.DS_Store
+Thumbs.db

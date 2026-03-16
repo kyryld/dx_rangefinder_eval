@@ -1,0 +1,57 @@
+{
+  "format_version": 1,
+  "frame_id": "frame_002",
+  "source_image": "frame_002.png",
+  "objects": [
+    {
+      "object_id": "pred_0",
+      "class": "person",
+      "bbox": {
+        "x_center_rel": 0.202,
+        "y_center_rel": 0.462,
+        "width_rel": 0.041,
+        "height_rel": 0.114
+      },
+      "distance_m": 24.5,
+      "confidence_detection": 0.95,
+      "confidence_distance": 0.80
+    },
+    {
+      "object_id": "pred_1",
+      "class": "person",
+      "bbox": {
+        "x_center_rel": 0.652,
+        "y_center_rel": 0.471,
+        "width_rel": 0.037,
+        "height_rel": 0.109
+      },
+      "distance_m": 19.8,
+      "confidence_detection": 0.90,
+      "confidence_distance": 0.72
+    },
+    {
+      "object_id": "pred_2",
+      "class": "vehicle",
+      "bbox": {
+        "x_center_rel": 0.502,
+        "y_center_rel": 0.598,
+        "width_rel": 0.202,
+        "height_rel": 0.138
+      },
+      "distance_m": 58.3,
+      "confidence_detection": 0.85
+    },
+    {
+      "object_id": "pred_3",
+      "class": "person",
+      "bbox": {
+        "x_center_rel": 0.850,
+        "y_center_rel": 0.450,
+        "width_rel": 0.035,
+        "height_rel": 0.100
+      },
+      "distance_m": 45.0,
+      "confidence_detection": 0.30
+    }
+  ]
+}
