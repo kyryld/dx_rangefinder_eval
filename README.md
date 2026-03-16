@@ -171,25 +171,6 @@ colleague:
 Get the spreadsheet ID from the URL:
 `https://docs.google.com/spreadsheets/d/`**`THIS_PART`**`/edit`
 
-### Step 6 — (Optional) Create a Shared Drive folder for prediction zips
-
-> **Important:** The folder must be in a **Shared Drive** (formerly Team Drive),
-> not in anyone's personal My Drive. Google service accounts have no personal
-> storage quota and cannot upload to regular My Drive folders. Shared Drives
-> have their own organizational storage and work correctly.
-> Shared Drives require a Google Workspace account.
-
-1. In Google Drive, click **Shared drives** in the left sidebar → **New**
-2. Name it (e.g. `rangefinder-eval`) → **Create**
-3. Click **Manage members** → add the service account email with **Content manager** access
-4. Add your teammates' Google accounts as members (Viewer or Content manager)
-5. Create a folder inside the Shared Drive (e.g. `predictions`)
-6. Get the folder ID from the URL when you have that folder open:
-   `https://drive.google.com/drive/folders/`**`THIS_PART_IS_THE_ID`**
-
-Each uploaded zip is named `{run_name}_predictions.zip` and lands in this
-folder. The "Predictions (Drive)" spreadsheet column stores the direct link.
-The upload prompt only appears when `drive_folder_id` is set in `creds.json`.
 
 ### Step 7 — Build and distribute `creds.json`
 
@@ -201,7 +182,6 @@ There are two ways to supply the service account credentials.
 {
   "author": "Your Name",
   "spreadsheet_id": "1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgVE2upms",
-  "drive_folder_id": "1AbCdEfGhIjKlMnOpQrStUvWxYz",
   "service_account_file": "/path/to/your-downloaded-key.json"
 }
 ```
@@ -215,7 +195,6 @@ No copy-pasting of the private key required.
 {
   "author": "Your Name",
   "spreadsheet_id": "1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgVE2upms",
-  "drive_folder_id": "1AbCdEfGhIjKlMnOpQrStUvWxYz",
   "service_account": {
     "type": "service_account",
     "project_id": "rangefinder-eval",

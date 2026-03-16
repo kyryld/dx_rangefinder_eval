@@ -37,8 +37,6 @@ from __future__ import annotations
 
 import json
 import math
-import tempfile
-import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -71,8 +69,6 @@ SPREADSHEET_COLUMNS: list[str] = [
     "Matched GT objects",
     "Total predictions",
     "Detection recall",
-    # --- Predictions archive ---
-    "Predictions (Drive)",
     # --- Free text ---
     "Notes",
 ]
@@ -152,94 +148,6 @@ def load_creds(path: Path | None = None) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# Google Drive upload
-# ---------------------------------------------------------------------------
-
-
-def upload_predictions_zip(
-    pred_dir: Path,
-    run_name: str,
-    drive_folder_id: str,
-    service_account_info: dict[str, Any],
-) -> str:
-    """Zip the predictions folder and upload it to a shared Drive folder.
-
-    Returns the ``webViewLink`` of the uploaded file so it can be stored in
-    the spreadsheet.  The file is readable by anyone who has access to the
-    parent folder (folder-level sharing is expected to be set up by the admin).
-
-    Parameters
-    ----------
-    pred_dir:
-        Local folder containing prediction JSON files.
-    run_name:
-        Used to name the uploaded zip: ``{run_name}_predictions.zip``.
-    drive_folder_id:
-        ID of the target Drive folder (from the folder's URL).
-    service_account_info:
-        Service account JSON key dict (same one used for Sheets auth).
-    """
-    try:
-        from google.oauth2.service_account import Credentials
-        from googleapiclient.discovery import build
-        from googleapiclient.http import MediaFileUpload
-    except ImportError as exc:
-        raise ImportError(
-            "google-api-python-client is required for Drive upload. "
-            "Run: uv add google-api-python-client"
-        ) from exc
-
-    # drive scope (not drive.file) is required to write into folders created
-    # by other users that were shared with the service account.
-    scopes = [
-        "https://www.googleapis.com/auth/drive",
-    ]
-    creds = Credentials.from_service_account_info(service_account_info, scopes=scopes)
-    service = build("drive", "v3", credentials=creds, cache_discovery=False)
-
-    # Create zip in a temp file
-    with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as tmp:
-        tmp_path = Path(tmp.name)
-
-    try:
-        with zipfile.ZipFile(tmp_path, "w", zipfile.ZIP_DEFLATED) as zf:
-            for json_file in sorted(pred_dir.glob("*.json")):
-                zf.write(json_file, json_file.name)
-
-        file_metadata: dict[str, Any] = {
-            "name": f"{run_name}_predictions.zip",
-            "parents": [drive_folder_id],
-        }
-        media = MediaFileUpload(str(tmp_path), mimetype="application/zip", resumable=False)
-        try:
-            uploaded = (
-                service.files()
-                .create(
-                    body=file_metadata,
-                    media_body=media,
-                    fields="id,webViewLink",
-                    supportsAllDrives=True,
-                )
-                .execute()
-            )
-        except Exception as exc:
-            err = str(exc)
-            if "storageQuotaExceeded" in err or "storage quota" in err.lower():
-                raise RuntimeError(
-                    "Service accounts have no personal Drive storage quota.\n"
-                    "The target folder must be in a Shared Drive (not personal My Drive).\n"
-                    "Create a Shared Drive, move or recreate the folder there, share it\n"
-                    "with the service account as a member, and update drive_folder_id.\n"
-                    f"Original error: {exc}"
-                ) from exc
-            raise
-    finally:
-        tmp_path.unlink(missing_ok=True)
-
-    return uploaded.get("webViewLink", "")
-
-
-# ---------------------------------------------------------------------------
 # Spreadsheet row
 # ---------------------------------------------------------------------------
 
@@ -253,7 +161,6 @@ def _make_row(
     scorer_config: str,
     intended_task: str,
     result_dict: dict[str, Any],
-    predictions_link: str,
     notes: str,
 ) -> list[Any]:
     """Build a flat row matching SPREADSHEET_COLUMNS order."""
@@ -294,8 +201,6 @@ def _make_row(
         _v(d.get("matched_gt_all")),
         _v(d.get("total_pred_all")),
         _v(d.get("detection_recall_all")),
-        # Predictions archive
-        predictions_link,
         # Free text
         notes,
     ]
@@ -310,7 +215,6 @@ def append_row(
     scorer_config: str,
     intended_task: str,
     result_dict: dict[str, Any],
-    predictions_link: str,
     notes: str,
     spreadsheet_id: str,
     service_account_info: dict[str, Any],
@@ -368,7 +272,6 @@ def append_row(
         scorer_config=scorer_config,
         intended_task=intended_task,
         result_dict=result_dict,
-        predictions_link=predictions_link,
         notes=notes,
     )
     ws.append_row(row, value_input_option="USER_ENTERED")

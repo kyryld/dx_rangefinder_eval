@@ -2,8 +2,6 @@
   "_comment": "Copy this file to ~/.eval_rangefinder/creds.json and fill in your details. NEVER commit this file.",
   "author": "Your Name",
   "spreadsheet_id": "REPLACE_WITH_SPREADSHEET_ID_FROM_URL",
-  "drive_folder_id": "REPLACE_WITH_DRIVE_FOLDER_ID_OR_REMOVE_THIS_KEY",
-
   "_comment_service_account": "Choose ONE of the two options below:",
 
   "--- OPTION A (recommended) ---": "Point directly to the JSON key file Google gave you. No copy-paste needed.",

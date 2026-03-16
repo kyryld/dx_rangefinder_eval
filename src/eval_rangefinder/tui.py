@@ -18,9 +18,8 @@ Flow
       a. Load credentials (fail fast before asking more questions)
       b. Suggest an auto-generated run name; let user edit it
       c. Ask for intended task (detection / ranging / both)
-      d. Optionally upload predictions zip to Google Drive
-      e. Ask for a notes field (common component tags shown as a hint)
-      f. Append row to spreadsheet; print URL
+      d. Ask for a notes field (common component tags shown as a hint)
+      e. Append row to spreadsheet; print URL
 """
 
 from __future__ import annotations
@@ -35,12 +34,7 @@ from rich.console import Console
 from rich.panel import Panel
 
 from .scorer import CONFIGS, SCORER_VERSION, Scorer, print_results_table
-from .sheets import (
-    DEFAULT_CREDS_PATH,
-    append_row,
-    load_creds,
-    upload_predictions_zip,
-)
+from .sheets import DEFAULT_CREDS_PATH, append_row, load_creds
 
 console = Console()
 
@@ -229,7 +223,6 @@ def main() -> None:
     author: str = creds.get("author", "").strip() or "unknown"
     spreadsheet_id: str = creds.get("spreadsheet_id", "").strip()
     service_account_info: dict = creds.get("service_account", {})
-    drive_folder_id: str = creds.get("drive_folder_id", "").strip()
 
     if not spreadsheet_id:
         console.print("[red]'spreadsheet_id' is missing from creds.json.[/red]")
@@ -257,26 +250,7 @@ def main() -> None:
     )
 
     # ------------------------------------------------------------------ #
-    # Step 7c — Drive upload (only offered when drive_folder_id is set)  #
-    # ------------------------------------------------------------------ #
-
-    predictions_link = ""
-    if drive_folder_id:
-        if _confirm("Upload predictions zip to Google Drive?", default=True):
-            console.print("[dim]Zipping and uploading…[/dim]")
-            try:
-                predictions_link = upload_predictions_zip(
-                    pred_dir=pred_dir,
-                    run_name=run_name,
-                    drive_folder_id=drive_folder_id,
-                    service_account_info=service_account_info,
-                )
-                console.print(f"[green]Uploaded → {predictions_link}[/green]")
-            except Exception as exc:
-                console.print(f"[yellow]Drive upload failed: {exc}  (continuing without it)[/yellow]")
-
-    # ------------------------------------------------------------------ #
-    # Step 7d — notes (with component-tag hint)                          #
+    # Step 7c — notes (with component-tag hint)                          #
     # ------------------------------------------------------------------ #
 
     console.print(f"[dim]Common component tags: {TAGS_HINT}[/dim]")
@@ -286,7 +260,7 @@ def main() -> None:
     ).strip()
 
     # ------------------------------------------------------------------ #
-    # Step 7e — append row                                                #
+    # Step 7d — append row                                                #
     # ------------------------------------------------------------------ #
 
     console.print("\n[dim]Publishing to Google Sheets…[/dim]")
@@ -300,7 +274,6 @@ def main() -> None:
             scorer_config=config_id,
             intended_task=intended_task,
             result_dict=result_dict,
-            predictions_link=predictions_link,
             notes=notes,
             spreadsheet_id=spreadsheet_id,
             service_account_info=service_account_info,
