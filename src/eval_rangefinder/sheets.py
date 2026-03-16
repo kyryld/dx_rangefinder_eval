@@ -211,11 +211,28 @@ def upload_predictions_zip(
             "parents": [drive_folder_id],
         }
         media = MediaFileUpload(str(tmp_path), mimetype="application/zip", resumable=False)
-        uploaded = (
-            service.files()
-            .create(body=file_metadata, media_body=media, fields="id,webViewLink")
-            .execute()
-        )
+        try:
+            uploaded = (
+                service.files()
+                .create(
+                    body=file_metadata,
+                    media_body=media,
+                    fields="id,webViewLink",
+                    supportsAllDrives=True,
+                )
+                .execute()
+            )
+        except Exception as exc:
+            err = str(exc)
+            if "storageQuotaExceeded" in err or "storage quota" in err.lower():
+                raise RuntimeError(
+                    "Service accounts have no personal Drive storage quota.\n"
+                    "The target folder must be in a Shared Drive (not personal My Drive).\n"
+                    "Create a Shared Drive, move or recreate the folder there, share it\n"
+                    "with the service account as a member, and update drive_folder_id.\n"
+                    f"Original error: {exc}"
+                ) from exc
+            raise
     finally:
         tmp_path.unlink(missing_ok=True)
 
