@@ -3,6 +3,9 @@ creds.json
 service_account.json
 *.key.json
 
+# --- saved scorer output ---
+*_results.json
+
 # --- Python ---
 __pycache__/
 *.py[cod]
