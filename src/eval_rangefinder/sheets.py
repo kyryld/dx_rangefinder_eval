@@ -78,7 +78,14 @@ SPREADSHEET_COLUMNS: list[str] = [
 ]
 
 DEFAULT_CREDS_PATH = Path.home() / ".eval_rangefinder" / "creds.json"
-FALLBACK_CREDS_PATH = Path("creds.json")
+
+
+def _find_project_root() -> Path | None:
+    """Walk up from cwd looking for pyproject.toml as the project root marker."""
+    for parent in [Path.cwd(), *Path.cwd().parents]:
+        if (parent / "pyproject.toml").exists():
+            return parent
+    return None
 
 
 def load_creds(path: Path | None = None) -> dict[str, Any]:
@@ -87,7 +94,8 @@ def load_creds(path: Path | None = None) -> dict[str, Any]:
     Search order (first found wins):
       1. Explicitly supplied ``path``
       2. ``~/.eval_rangefinder/creds.json``
-      3. ``./creds.json`` in the current working directory
+      3. ``<project_root>/creds.json``  (project root found via pyproject.toml)
+      4. ``./creds.json``               (current working directory)
 
     Service account resolution
     --------------------------
@@ -97,7 +105,7 @@ def load_creds(path: Path | None = None) -> dict[str, Any]:
 
         { "service_account": { "type": "service_account", ... } }
 
-    **By file path** (recommended — avoids copy-paste issues with the private key):
+    **By file path** (avoids copy-paste issues with the private key):
 
         { "service_account_file": "/path/to/downloaded-key.json" }
 
@@ -107,15 +115,27 @@ def load_creds(path: Path | None = None) -> dict[str, Any]:
     if path is not None:
         candidates.append(Path(path))
     candidates.append(DEFAULT_CREDS_PATH)
-    candidates.append(FALLBACK_CREDS_PATH)
+    project_root = _find_project_root()
+    if project_root:
+        candidates.append(project_root / "creds.json")
+    candidates.append(Path("creds.json"))
 
-    for candidate in candidates:
+    # Deduplicate while preserving order
+    seen: set[Path] = set()
+    unique: list[Path] = []
+    for c in candidates:
+        resolved = c.resolve()
+        if resolved not in seen:
+            seen.add(resolved)
+            unique.append(c)
+
+    for candidate in unique:
         if candidate.exists():
             creds = json.loads(candidate.read_text(encoding="utf-8"))
             # Resolve service_account_file → service_account
             sa_file = creds.pop("service_account_file", None)
             if sa_file:
-                sa_path = Path(sa_file).expanduser()
+                sa_path = Path(sa_file).expanduser().resolve()
                 if not sa_path.exists():
                     raise FileNotFoundError(
                         f"service_account_file not found: {sa_path}\n"
@@ -124,9 +144,9 @@ def load_creds(path: Path | None = None) -> dict[str, Any]:
                 creds["service_account"] = json.loads(sa_path.read_text(encoding="utf-8"))
             return creds
 
-    searched = ", ".join(str(p) for p in candidates)
+    searched = "\n  ".join(str(c) for c in unique)
     raise FileNotFoundError(
-        f"No credentials file found. Searched: {searched}\n"
+        f"No credentials file found. Searched:\n  {searched}\n"
         "Copy creds.json.example to one of the above paths and fill in your details."
     )
 
@@ -169,8 +189,10 @@ def upload_predictions_zip(
             "Run: uv add google-api-python-client"
         ) from exc
 
+    # drive scope (not drive.file) is required to write into folders created
+    # by other users that were shared with the service account.
     scopes = [
-        "https://www.googleapis.com/auth/drive.file",
+        "https://www.googleapis.com/auth/drive",
     ]
     creds = Credentials.from_service_account_info(service_account_info, scopes=scopes)
     service = build("drive", "v3", credentials=creds, cache_discovery=False)
@@ -290,14 +312,23 @@ def append_row(
             "Run: uv add gspread google-auth"
         ) from exc
 
+    # Only the spreadsheets scope is needed; drive.file is not required and
+    # will fail if the Drive API is not enabled in the GCP project.
     scopes = [
         "https://www.googleapis.com/auth/spreadsheets",
-        "https://www.googleapis.com/auth/drive.file",
     ]
     creds = Credentials.from_service_account_info(service_account_info, scopes=scopes)
     client = gspread.authorize(creds)
 
-    spreadsheet = client.open_by_key(spreadsheet_id)
+    try:
+        spreadsheet = client.open_by_key(spreadsheet_id)
+    except Exception as exc:
+        raise PermissionError(
+            f"Could not open spreadsheet '{spreadsheet_id}'.\n"
+            f"Make sure the spreadsheet is shared with the service account: "
+            f"{service_account_info.get('client_email', '(unknown)')}\n"
+            f"Original error: {exc}"
+        ) from exc
 
     try:
         ws = spreadsheet.worksheet(worksheet_name)
