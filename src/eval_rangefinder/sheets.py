@@ -88,6 +88,20 @@ def load_creds(path: Path | None = None) -> dict[str, Any]:
       1. Explicitly supplied ``path``
       2. ``~/.eval_rangefinder/creds.json``
       3. ``./creds.json`` in the current working directory
+
+    Service account resolution
+    --------------------------
+    Two formats are supported for the service account credentials:
+
+    **Embedded** (inline JSON object):
+
+        { "service_account": { "type": "service_account", ... } }
+
+    **By file path** (recommended — avoids copy-paste issues with the private key):
+
+        { "service_account_file": "/path/to/downloaded-key.json" }
+
+    If both keys are present, ``service_account_file`` takes precedence.
     """
     candidates: list[Path] = []
     if path is not None:
@@ -97,7 +111,18 @@ def load_creds(path: Path | None = None) -> dict[str, Any]:
 
     for candidate in candidates:
         if candidate.exists():
-            return json.loads(candidate.read_text(encoding="utf-8"))
+            creds = json.loads(candidate.read_text(encoding="utf-8"))
+            # Resolve service_account_file → service_account
+            sa_file = creds.pop("service_account_file", None)
+            if sa_file:
+                sa_path = Path(sa_file).expanduser()
+                if not sa_path.exists():
+                    raise FileNotFoundError(
+                        f"service_account_file not found: {sa_path}\n"
+                        "Check the path in your creds.json."
+                    )
+                creds["service_account"] = json.loads(sa_path.read_text(encoding="utf-8"))
+            return creds
 
     searched = ", ".join(str(p) for p in candidates)
     raise FileNotFoundError(

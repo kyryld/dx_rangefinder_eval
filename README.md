@@ -189,7 +189,23 @@ link. The upload prompt only appears when `drive_folder_id` is set in `creds.jso
 
 ### Step 7 — Build and distribute `creds.json`
 
-Open the downloaded JSON key file and embed it into `creds.json`:
+There are two ways to supply the service account credentials.
+
+**Option A — file path (recommended, avoids copy-paste issues):**
+
+```json
+{
+  "author": "Your Name",
+  "spreadsheet_id": "1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgVE2upms",
+  "drive_folder_id": "1AbCdEfGhIjKlMnOpQrStUvWxYz",
+  "service_account_file": "/path/to/your-downloaded-key.json"
+}
+```
+
+Just point `service_account_file` at the JSON file Google gave you.
+No copy-pasting of the private key required.
+
+**Option B — embedded inline:**
 
 ```json
 {
@@ -202,18 +218,17 @@ Open the downloaded JSON key file and embed it into `creds.json`:
     "private_key_id": "abc123",
     "private_key": "-----BEGIN RSA PRIVATE KEY-----\n...",
     "client_email": "eval-rangefinder@rangefinder-eval.iam.gserviceaccount.com",
-    "client_id": "...",
-    "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-    "token_uri": "https://oauth2.googleapis.com/token",
     ...
   }
 }
 ```
 
-The downloaded key file contents go **nested inside** `"service_account": { ... }`.
-Each team member copies this file to `~/.eval_rangefinder/creds.json` and
-replaces `"author"` with their own name. Everything else is identical for
-everyone.
+Paste the **entire contents** of the downloaded JSON file as the value of
+`"service_account"`. The private key must keep its `\n` escape sequences
+intact — do not replace them with actual line breaks.
+
+Each team member copies `creds.json` to `~/.eval_rangefinder/creds.json` and
+replaces `"author"` with their own name. Everything else is identical for everyone.
 
 The service account key is a **shared secret** — treat it like a password.
 `creds.json` is in `.gitignore` and must never be committed.
