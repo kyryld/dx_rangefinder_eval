@@ -3,27 +3,29 @@ TUI entry point for the rangefinder evaluation workflow.
 
 Usage
 -----
-    eval-rangefinder          # installed via `uv run eval-rangefinder`
+    eval-rangefinder          # installed entry point
     uv run eval-rangefinder   # from the project root
 
 Flow
 ----
 1.  Ask for the predictions folder
-2.  Ask for the ground-truth folder (dataset name inferred from folder name)
+2.  Ask for the ground-truth folder — dataset name inferred from folder name
 3.  Sanity-check file counts (warn, don't fail)
 4.  Run scorer → print results table
-5.  Ask whether to publish to the shared Google Spreadsheet
-6.  If yes:
-      a. Suggest an auto-generated run name; let user edit it
-      b. Ask for intended task (detection / ranging / both)
-      c. Ask for optional tags (with reminder of common tags)
-      d. Ask for optional one-line notes
-      e. Load credentials from creds.json
+5.  Ask whether to save results to a JSON file
+6.  Ask whether to publish to the shared Google Spreadsheet
+7.  If publishing:
+      a. Load credentials (fail fast before asking more questions)
+      b. Suggest an auto-generated run name; let user edit it
+      c. Ask for intended task (detection / ranging / both)
+      d. Optionally upload predictions zip to Google Drive
+      e. Ask for a notes field (common component tags shown as a hint)
       f. Append row to spreadsheet; print URL
 """
 
 from __future__ import annotations
 
+import json
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -33,11 +35,17 @@ from rich.console import Console
 from rich.panel import Panel
 
 from .scorer import CONFIGS, SCORER_VERSION, Scorer, print_results_table
-from .sheets import DEFAULT_CREDS_PATH, FALLBACK_CREDS_PATH, append_row, load_creds
+from .sheets import (
+    DEFAULT_CREDS_PATH,
+    FALLBACK_CREDS_PATH,
+    append_row,
+    load_creds,
+    upload_predictions_zip,
+)
 
 console = Console()
 
-COMMON_TAGS = (
+TAGS_HINT = (
     "demosaicing  color_correction  super_resolution  "
     "detection_model  segmentation_model  pose_model  ranging_method"
 )
@@ -61,7 +69,6 @@ QUESTIONARY_STYLE = questionary.Style(
 
 
 def _ask(prompt: str, **kwargs: object) -> str:
-    """questionary.text wrapper that exits cleanly on Ctrl-C."""
     try:
         result = questionary.text(prompt, style=QUESTIONARY_STYLE, **kwargs).ask()
     except KeyboardInterrupt:
@@ -113,6 +120,16 @@ def _auto_run_name(author: str) -> str:
     return f"{safe_author}_{ts}"
 
 
+def _save_results_json(result_dict: dict, dataset_name: str) -> None:
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    default_name = f"{dataset_name}_{ts}_results.json"
+    raw = _ask("Save path:", default=default_name).strip() or default_name
+    out_path = Path(raw)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(json.dumps(result_dict, indent=2, ensure_ascii=False), encoding="utf-8")
+    console.print(f"[green]Saved → {out_path.resolve()}[/green]")
+
+
 # ---------------------------------------------------------------------------
 # Main flow
 # ---------------------------------------------------------------------------
@@ -132,19 +149,11 @@ def main() -> None:
     # ------------------------------------------------------------------ #
 
     pred_dir = Path(
-        _ask(
-            "Path to predictions folder:",
-            validate=_validate_dir,
-        ).strip()
+        _ask("Path to predictions folder:", validate=_validate_dir).strip()
     )
-
     gt_dir = Path(
-        _ask(
-            "Path to ground-truth folder:",
-            validate=_validate_dir,
-        ).strip()
+        _ask("Path to ground-truth folder:", validate=_validate_dir).strip()
     )
-
     dataset_name = gt_dir.name
 
     # ------------------------------------------------------------------ #
@@ -157,14 +166,12 @@ def main() -> None:
     if gt_count == 0:
         console.print("[red]No JSON files found in the GT folder. Aborting.[/red]")
         sys.exit(1)
-
     if pred_count == 0:
         console.print("[red]No JSON files found in the predictions folder. Aborting.[/red]")
         sys.exit(1)
-
     if gt_count != pred_count:
         console.print(
-            f"[yellow]⚠  File count mismatch: {gt_count} GT files vs "
+            f"[yellow]  File count mismatch: {gt_count} GT files vs "
             f"{pred_count} prediction files.[/yellow]"
         )
 
@@ -173,11 +180,7 @@ def main() -> None:
     # ------------------------------------------------------------------ #
 
     config_names = list(CONFIGS.keys())
-    if len(config_names) > 1:
-        config_id = _select("Scorer config:", config_names)
-    else:
-        config_id = config_names[0]
-
+    config_id = _select("Scorer config:", config_names) if len(config_names) > 1 else config_names[0]
     scorer = Scorer(config=CONFIGS[config_id])
 
     # ------------------------------------------------------------------ #
@@ -186,7 +189,7 @@ def main() -> None:
 
     console.print("\n[dim]Running scorer…[/dim]")
     try:
-        result = scorer.score(gt_dir, pred_dir, dataset_name=dataset_name)
+        result = scorer.score(gt_dir, pred_dir, dataset_name=dataset_name, console=console)
     except Exception as exc:
         console.print(f"[red]Scorer error: {exc}[/red]")
         sys.exit(1)
@@ -195,7 +198,14 @@ def main() -> None:
     result_dict = result.to_dict()
 
     # ------------------------------------------------------------------ #
-    # Step 5 — publish?                                                   #
+    # Step 5 — save JSON?                                                 #
+    # ------------------------------------------------------------------ #
+
+    if _confirm("Save results to a JSON file?", default=False):
+        _save_results_json(result_dict, dataset_name)
+
+    # ------------------------------------------------------------------ #
+    # Step 6 — publish?                                                   #
     # ------------------------------------------------------------------ #
 
     if not _confirm("Publish results to the shared Google Spreadsheet?"):
@@ -203,8 +213,7 @@ def main() -> None:
         return
 
     # ------------------------------------------------------------------ #
-    # Load credentials early so the user doesn't fill in everything just  #
-    # to hit a missing-creds error at the end.                            #
+    # Load credentials early — fail before asking more questions          #
     # ------------------------------------------------------------------ #
 
     try:
@@ -212,7 +221,7 @@ def main() -> None:
     except FileNotFoundError as exc:
         console.print(f"[red]{exc}[/red]")
         console.print(
-            "[dim]Copy [bold]creds.json.example[/bold] to "
+            f"[dim]Copy [bold]creds.json.example[/bold] to "
             f"[bold]{DEFAULT_CREDS_PATH}[/bold] or [bold]{FALLBACK_CREDS_PATH}[/bold] "
             "and fill in your details.[/dim]"
         )
@@ -221,27 +230,26 @@ def main() -> None:
     author: str = creds.get("author", "").strip() or "unknown"
     spreadsheet_id: str = creds.get("spreadsheet_id", "").strip()
     service_account_info: dict = creds.get("service_account", {})
+    drive_folder_id: str = creds.get("drive_folder_id", "").strip()
 
     if not spreadsheet_id:
         console.print("[red]'spreadsheet_id' is missing from creds.json.[/red]")
         sys.exit(1)
-
     if not service_account_info:
         console.print("[red]'service_account' block is missing from creds.json.[/red]")
         sys.exit(1)
 
     # ------------------------------------------------------------------ #
-    # Step 6a — run name                                                  #
+    # Step 7a — run name                                                  #
     # ------------------------------------------------------------------ #
 
     suggested = _auto_run_name(author)
-    run_name = _ask(
-        "Run name (edit or press Enter to accept):",
-        default=suggested,
-    ).strip() or suggested
+    run_name = (
+        _ask("Run name (edit or press Enter to accept):", default=suggested).strip() or suggested
+    )
 
     # ------------------------------------------------------------------ #
-    # Step 6b — intended task                                             #
+    # Step 7b — intended task                                             #
     # ------------------------------------------------------------------ #
 
     intended_task = _select(
@@ -250,23 +258,36 @@ def main() -> None:
     )
 
     # ------------------------------------------------------------------ #
-    # Step 6c — tags                                                      #
+    # Step 7c — Drive upload (only offered when drive_folder_id is set)  #
     # ------------------------------------------------------------------ #
 
-    console.print(f"[dim]Common tags: {COMMON_TAGS}[/dim]")
-    tags = _ask(
-        "Tags (space- or comma-separated, or leave blank):",
+    predictions_link = ""
+    if drive_folder_id:
+        if _confirm("Upload predictions zip to Google Drive?", default=True):
+            console.print("[dim]Zipping and uploading…[/dim]")
+            try:
+                predictions_link = upload_predictions_zip(
+                    pred_dir=pred_dir,
+                    run_name=run_name,
+                    drive_folder_id=drive_folder_id,
+                    service_account_info=service_account_info,
+                )
+                console.print(f"[green]Uploaded → {predictions_link}[/green]")
+            except Exception as exc:
+                console.print(f"[yellow]Drive upload failed: {exc}  (continuing without it)[/yellow]")
+
+    # ------------------------------------------------------------------ #
+    # Step 7d — notes (with component-tag hint)                          #
+    # ------------------------------------------------------------------ #
+
+    console.print(f"[dim]Common component tags: {TAGS_HINT}[/dim]")
+    notes = _ask(
+        "Notes (tags, description, anything useful — optional):",
         default="",
     ).strip()
 
     # ------------------------------------------------------------------ #
-    # Step 6d — notes                                                     #
-    # ------------------------------------------------------------------ #
-
-    notes = _ask("One-line notes (optional):", default="").strip()
-
-    # ------------------------------------------------------------------ #
-    # Step 6e — append row                                                #
+    # Step 7e — append row                                                #
     # ------------------------------------------------------------------ #
 
     console.print("\n[dim]Publishing to Google Sheets…[/dim]")
@@ -274,13 +295,13 @@ def main() -> None:
         url = append_row(
             run_name=run_name,
             author=author,
-            dataset=dataset_name,
-            pred_dir=str(pred_dir.resolve()),
+            dataset_name=dataset_name,
+            gt_hash=result.gt_hash,
             scorer_version=SCORER_VERSION,
             scorer_config=config_id,
             intended_task=intended_task,
             result_dict=result_dict,
-            tags=tags,
+            predictions_link=predictions_link,
             notes=notes,
             spreadsheet_id=spreadsheet_id,
             service_account_info=service_account_info,

@@ -30,9 +30,6 @@ class TestComputeIoU:
         assert compute_iou(a, b) == pytest.approx(0.0)
 
     def test_half_overlap(self):
-        a = (0.25, 0.5, 0.5, 0.5)
-        b = (0.75, 0.5, 0.5, 0.5)
-        # x overlap = 0.0, actually just touching — use shifted boxes
         a = (0.3, 0.5, 0.4, 0.4)
         b = (0.5, 0.5, 0.4, 0.4)
         iou = compute_iou(a, b)
@@ -66,10 +63,8 @@ class TestGreedyMatch:
         mat = iou_matrix(boxes, boxes)
         matches = greedy_match(mat, iou_threshold=0.5)
         assert len(matches) == 2
-        gt_idxs = {m[0] for m in matches}
-        pred_idxs = {m[1] for m in matches}
-        assert gt_idxs == {0, 1}
-        assert pred_idxs == {0, 1}
+        assert {m[0] for m in matches} == {0, 1}
+        assert {m[1] for m in matches} == {0, 1}
 
     def test_empty_inputs(self):
         mat = iou_matrix([], [])
@@ -91,11 +86,9 @@ class TestRangingMetrics:
         assert math.isnan(mae([], []))
 
     def test_rmse_known(self):
-        # errors are 2 and -2, rmse = 2
         assert rmse([10.0, 20.0], [12.0, 18.0]) == pytest.approx(2.0)
 
     def test_rel_err_known(self):
-        # |12-10|/10 = 0.2, |18-20|/20 = 0.1 → mean = 0.15
         assert mean_relative_error([10.0, 20.0], [12.0, 18.0]) == pytest.approx(0.15)
 
     def test_rel_err_empty(self):
@@ -109,33 +102,24 @@ class TestRangingMetrics:
 class TestComputeAP:
     def test_perfect_detector(self):
         box = (0.5, 0.5, 0.2, 0.2)
-        gt = [[box]]
-        pred = [[box]]
-        scores = [[1.0]]
-        ap = compute_ap(gt, pred, scores, iou_threshold=0.5)
+        ap = compute_ap([[box]], [[box]], [[1.0]], iou_threshold=0.5)
         assert ap == pytest.approx(1.0)
 
     def test_no_predictions(self):
         box = (0.5, 0.5, 0.2, 0.2)
-        gt = [[box]]
-        pred = [[]]
-        scores = [[]]
-        ap = compute_ap(gt, pred, scores, iou_threshold=0.5)
+        ap = compute_ap([[box]], [[]], [[]], iou_threshold=0.5)
         assert ap == pytest.approx(0.0)
 
     def test_no_gt_returns_nan(self):
         box = (0.5, 0.5, 0.2, 0.2)
-        gt = [[]]
-        pred = [[box]]
-        scores = [[0.9]]
-        ap = compute_ap(gt, pred, scores, iou_threshold=0.5)
+        ap = compute_ap([[]], [[box]], [[0.9]], iou_threshold=0.5)
         assert math.isnan(ap)
 
     def test_ap_between_0_and_1(self):
         box_gt = (0.5, 0.5, 0.2, 0.2)
         box_fp = (0.1, 0.1, 0.1, 0.1)
         gt = [[box_gt], [box_gt]]
-        pred = [[box_gt, box_fp], [box_fp]]  # one TP, two FP, one FN
+        pred = [[box_gt, box_fp], [box_fp]]
         scores = [[0.9, 0.8], [0.7]]
         ap = compute_ap(gt, pred, scores, iou_threshold=0.5)
         assert 0.0 <= ap <= 1.0

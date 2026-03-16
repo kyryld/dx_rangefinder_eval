@@ -2,6 +2,7 @@
   "_comment": "Copy this file to ~/.eval_rangefinder/creds.json (or ./creds.json) and fill in your details. NEVER commit this file.",
   "author": "Your Name",
   "spreadsheet_id": "REPLACE_WITH_SPREADSHEET_ID_FROM_URL",
+  "drive_folder_id": "REPLACE_WITH_DRIVE_FOLDER_ID_OR_REMOVE_THIS_KEY",
   "service_account": {
     "type": "service_account",
     "project_id": "your-gcp-project-id",

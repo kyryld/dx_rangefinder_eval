@@ -9,6 +9,8 @@ always traceable to the exact evaluation code and parameters that produced them.
 from __future__ import annotations
 
 import dataclasses
+import hashlib
+import warnings
 from pathlib import Path
 from typing import Any
 
@@ -26,9 +28,9 @@ from .metrics import (
 from .schema import VALID_CLASSES, FrameLabel
 
 # Bump when the scoring algorithm changes in a way that would alter results.
-SCORER_VERSION: str = "1.0.0"
+SCORER_VERSION: str = "1.1.0"
 
-ALL_CLASSES: list[str] = sorted(VALID_CLASSES)  # building, person, vehicle
+ALL_CLASSES: list[str] = ["person", "vehicle", "building"]
 
 
 # ---------------------------------------------------------------------------
@@ -87,7 +89,10 @@ class _ClassAccumulator:
     total_gt: int = 0
     matched_gt: int = 0
     total_pred: int = 0
-    matched_pred: int = 0
+    # Whether at least one prediction for this class carried a real confidence score.
+    # AP is set to NaN when this is False — ranking all predictions equally is not
+    # a meaningful AP measurement.
+    has_confidence: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -98,14 +103,14 @@ class _ClassAccumulator:
 @dataclasses.dataclass
 class ClassMetrics:
     class_name: str
-    ap: float
+    ap: float  # NaN when no confidence scores were present
+    ap_valid: bool  # False when AP was suppressed due to missing confidence
     mae: float
     rmse: float
     rel_err: float
     total_gt: int
     matched_gt: int
     total_pred: int
-    matched_pred: int
     detection_recall: float
 
 
@@ -115,10 +120,12 @@ class ScorerResult:
     config_id: str
     dataset_name: str
     gt_dir: str
+    gt_hash: str
     pred_dir: str
     matched_files: int
     gt_only_files: int
     pred_only_files: int
+    skipped_files: int
     per_class: dict[str, ClassMetrics]
 
     def to_dict(self) -> dict[str, Any]:
@@ -127,32 +134,46 @@ class ScorerResult:
             "config_id": self.config_id,
             "dataset_name": self.dataset_name,
             "gt_dir": self.gt_dir,
+            "gt_hash": self.gt_hash,
             "pred_dir": self.pred_dir,
             "matched_files": self.matched_files,
             "gt_only_files": self.gt_only_files,
             "pred_only_files": self.pred_only_files,
+            "skipped_files": self.skipped_files,
         }
         for cls, m in self.per_class.items():
             d[f"AP_{cls}"] = m.ap
+            d[f"AP_{cls}_valid"] = m.ap_valid
             d[f"MAE_{cls}"] = m.mae
             d[f"RMSE_{cls}"] = m.rmse
             d[f"RelErr_{cls}"] = m.rel_err
             d[f"total_gt_{cls}"] = m.total_gt
             d[f"matched_gt_{cls}"] = m.matched_gt
             d[f"total_pred_{cls}"] = m.total_pred
-            d[f"matched_pred_{cls}"] = m.matched_pred
             d[f"recall_{cls}"] = m.detection_recall
 
-        # Aggregate totals across all classes
         d["total_gt_all"] = sum(m.total_gt for m in self.per_class.values())
         d["matched_gt_all"] = sum(m.matched_gt for m in self.per_class.values())
         d["total_pred_all"] = sum(m.total_pred for m in self.per_class.values())
-        d["matched_pred_all"] = sum(m.matched_pred for m in self.per_class.values())
         total_gt_all = d["total_gt_all"]
         d["detection_recall_all"] = (
             d["matched_gt_all"] / total_gt_all if total_gt_all > 0 else float("nan")
         )
         return d
+
+
+# ---------------------------------------------------------------------------
+# GT dataset hash
+# ---------------------------------------------------------------------------
+
+
+def compute_gt_hash(gt_dir: Path) -> str:
+    """Stable 12-char hex fingerprint of all GT JSON files (sorted by name)."""
+    h = hashlib.sha256()
+    for p in sorted(gt_dir.glob("*.json")):
+        h.update(p.name.encode("utf-8"))
+        h.update(p.read_bytes())
+    return h.hexdigest()[:12]
 
 
 # ---------------------------------------------------------------------------
@@ -173,7 +194,10 @@ class Scorer:
         gt_dir: Path,
         pred_dir: Path,
         dataset_name: str = "",
+        console: Console | None = None,
     ) -> ScorerResult:
+        c = console or Console()
+
         gt_files = {p.name: p for p in gt_dir.glob("*.json")}
         pred_files = {p.name: p for p in pred_dir.glob("*.json")}
 
@@ -182,25 +206,35 @@ class Scorer:
         pred_only = sorted(pred_files.keys() - gt_files.keys())
 
         accum: dict[str, _ClassAccumulator] = {cls: _ClassAccumulator() for cls in ALL_CLASSES}
+        skipped = 0
 
         for fname in shared:
-            gt_frame = FrameLabel.from_file(gt_files[fname])
-            pred_frame = FrameLabel.from_file(pred_files[fname])
+            try:
+                gt_frame = FrameLabel.from_file(gt_files[fname])
+                pred_frame = FrameLabel.from_file(pred_files[fname])
+            except Exception as exc:
+                c.print(f"[yellow]  Skipping {fname}: {exc}[/yellow]")
+                skipped += 1
+                continue
             self._process_frame(gt_frame, pred_frame, accum)
 
         per_class: dict[str, ClassMetrics] = {}
         for cls in ALL_CLASSES:
-            per_class[cls] = self._finalise_class(cls, accum[cls])
+            per_class[cls] = self._finalise_class(cls, accum[cls], console=c)
+
+        gt_hash = compute_gt_hash(gt_dir)
 
         return ScorerResult(
             scorer_version=SCORER_VERSION,
             config_id=self.config.config_id,
             dataset_name=dataset_name or gt_dir.name,
             gt_dir=str(gt_dir),
+            gt_hash=gt_hash,
             pred_dir=str(pred_dir),
             matched_files=len(shared),
             gt_only_files=len(gt_only),
             pred_only_files=len(pred_only),
+            skipped_files=skipped,
             per_class=per_class,
         )
 
@@ -222,10 +256,13 @@ class Scorer:
 
             gt_boxes = [o.bbox.as_tuple() for o in gt_objs]
             pred_boxes = [o.bbox.as_tuple() for o in pred_objs]
-            pred_scores = [
-                o.confidence_detection if o.confidence_detection is not None else 1.0
-                for o in pred_objs
-            ]
+            pred_scores: list[float] = []
+            for o in pred_objs:
+                if o.confidence_detection is not None:
+                    pred_scores.append(o.confidence_detection)
+                    accum[cls].has_confidence = True
+                else:
+                    pred_scores.append(1.0)
 
             accum[cls].total_gt += len(gt_objs)
             accum[cls].total_pred += len(pred_objs)
@@ -241,7 +278,6 @@ class Scorer:
             matches = greedy_match(mat, iou_thresh)
 
             accum[cls].matched_gt += len(matches)
-            accum[cls].matched_pred += len(matches)
 
             for gt_idx, pred_idx in matches:
                 accum[cls].gt_distances.append(gt_objs[gt_idx].distance_m)
@@ -251,24 +287,37 @@ class Scorer:
     # Per-class finalisation
     # ------------------------------------------------------------------
 
-    def _finalise_class(self, cls: str, acc: _ClassAccumulator) -> ClassMetrics:
-        ap = compute_ap(
-            acc.gt_boxes_per_image,
-            acc.pred_boxes_per_image,
-            acc.pred_scores_per_image,
-            iou_threshold=self.config.ap_iou_threshold,
-        )
+    def _finalise_class(
+        self, cls: str, acc: _ClassAccumulator, console: Console | None = None
+    ) -> ClassMetrics:
+        if acc.has_confidence:
+            ap = compute_ap(
+                acc.gt_boxes_per_image,
+                acc.pred_boxes_per_image,
+                acc.pred_scores_per_image,
+                iou_threshold=self.config.ap_iou_threshold,
+            )
+            ap_valid = True
+        else:
+            ap = float("nan")
+            ap_valid = False
+            if acc.total_pred > 0 and console:
+                console.print(
+                    f"[yellow]  AP for '{cls}' set to N/A: no confidence_detection "
+                    f"scores found in predictions.[/yellow]"
+                )
+
         recall = acc.matched_gt / acc.total_gt if acc.total_gt > 0 else float("nan")
         return ClassMetrics(
             class_name=cls,
             ap=ap,
+            ap_valid=ap_valid,
             mae=mae(acc.gt_distances, acc.pred_distances),
             rmse=rmse(acc.gt_distances, acc.pred_distances),
             rel_err=mean_relative_error(acc.gt_distances, acc.pred_distances),
             total_gt=acc.total_gt,
             matched_gt=acc.matched_gt,
             total_pred=acc.total_pred,
-            matched_pred=acc.matched_pred,
             detection_recall=recall,
         )
 
@@ -295,15 +344,17 @@ def print_results_table(result: ScorerResult, console: Console | None = None) ->
     c.print(
         f"\n[bold]Scorer v{result.scorer_version}[/bold]  "
         f"config: [cyan]{result.config_id}[/cyan]  "
-        f"dataset: [green]{result.dataset_name}[/green]"
+        f"dataset: [green]{result.dataset_name}[/green]  "
+        f"GT hash: [dim]{result.gt_hash}[/dim]"
     )
     c.print(
         f"Files: {result.matched_files} matched, "
         f"{result.gt_only_files} GT-only, "
-        f"{result.pred_only_files} pred-only\n"
+        f"{result.pred_only_files} pred-only"
+        + (f", [yellow]{result.skipped_files} skipped[/yellow]" if result.skipped_files else "")
+        + "\n"
     )
 
-    # --- Detection + ranging table ---
     table = Table(title="Per-class metrics", show_lines=True)
     table.add_column("Class", style="bold")
     table.add_column("AP@0.5", justify="right")
@@ -317,9 +368,10 @@ def print_results_table(result: ScorerResult, console: Console | None = None) ->
 
     for cls in ALL_CLASSES:
         m = result.per_class[cls]
+        ap_str = _fmt(m.ap) if m.ap_valid else "[dim]N/A[/dim]"
         table.add_row(
             cls,
-            _fmt(m.ap),
+            ap_str,
             _fmt(m.detection_recall),
             _fmt(m.mae),
             _fmt(m.rmse),

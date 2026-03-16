@@ -1,11 +1,11 @@
 {
-  "format_version": 1,
+  "format_version": 2,
   "frame_id": "frame_002",
   "source_image": "frame_002.png",
   "objects": [
     {
       "object_id": "pred_0",
-      "class": "person",
+      "class_name": "person",
       "bbox": {
         "x_center_rel": 0.202,
         "y_center_rel": 0.462,
@@ -18,7 +18,7 @@
     },
     {
       "object_id": "pred_1",
-      "class": "person",
+      "class_name": "person",
       "bbox": {
         "x_center_rel": 0.652,
         "y_center_rel": 0.471,
@@ -31,7 +31,7 @@
     },
     {
       "object_id": "pred_2",
-      "class": "vehicle",
+      "class_name": "vehicle",
       "bbox": {
         "x_center_rel": 0.502,
         "y_center_rel": 0.598,
@@ -43,7 +43,7 @@
     },
     {
       "object_id": "pred_3",
-      "class": "person",
+      "class_name": "person",
       "bbox": {
         "x_center_rel": 0.850,
         "y_center_rel": 0.450,

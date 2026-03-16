@@ -132,34 +132,6 @@ def mean_relative_error(true: list[float], pred: list[float]) -> float:
 # ---------------------------------------------------------------------------
 
 
-def compute_ap_single_class(
-    gt_boxes_per_image: list[list[tuple[float, float, float, float]]],
-    pred_entries: list[tuple[float, float, float, float, float]],
-    iou_threshold: float,
-) -> float:
-    """Average Precision for a single class at a fixed IoU threshold.
-
-    Parameters
-    ----------
-    gt_boxes_per_image:
-        A list (one per frame) of lists of GT boxes (cx, cy, w, h).
-    pred_entries:
-        A flat list of (image_idx, cx, cy, w, h, confidence) — one entry per
-        predicted object of this class across all frames.
-
-        Actually the signature uses a 5-tuple: (image_idx_float, cx, cy, w, h)
-        with a separate confidence list.  See the public wrapper below.
-    iou_threshold:
-        Minimum IoU for a prediction to count as a true positive.
-
-    Returns
-    -------
-    float
-        AP in [0, 1], or NaN if there are no GT objects.
-    """
-    raise NotImplementedError("Use compute_ap() instead.")
-
-
 def compute_ap(
     gt_boxes_per_image: list[list[tuple[float, float, float, float]]],
     pred_boxes_per_image: list[list[tuple[float, float, float, float]]],

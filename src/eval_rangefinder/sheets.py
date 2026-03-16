@@ -1,5 +1,5 @@
 """
-Google Sheets integration.
+Google Sheets (and Google Drive) integration.
 
 Authentication strategy
 -----------------------
@@ -9,19 +9,24 @@ headless / SSH environments.
 
 Setup (one-time, done by the project admin)
 -------------------------------------------
-1. In Google Cloud Console, create a project and enable the Sheets API.
+1. In Google Cloud Console, create a project and enable the Sheets API and
+   the Drive API.
 2. Create a service account; download its JSON key file.
 3. Share the target spreadsheet with the service account's e-mail address
    (give it Editor access).
-4. Distribute `creds.json` (see `creds.json.example`) to the team.  Each
-   member fills in their own `author` name; the service account block is
+4. (Optional) Create a shared Drive folder, share it with the service account
+   (Editor), and add its ID as ``drive_folder_id`` in creds.json.  This
+   enables uploading prediction zips from the TUI.
+5. Distribute ``creds.json`` (see ``creds.json.example``) to the team.  Each
+   member fills in their own ``author`` name; the service account block is
    identical for everyone.
 
-`creds.json` schema
--------------------
+``creds.json`` schema
+---------------------
 {
   "author": "Jane Doe",
   "spreadsheet_id": "<sheet id from the URL>",
+  "drive_folder_id": "<Drive folder id — optional, enables zip upload>",
   "service_account": { ...standard GCP service account JSON key fields... }
 }
 
@@ -32,6 +37,8 @@ from __future__ import annotations
 
 import json
 import math
+import tempfile
+import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -40,8 +47,8 @@ SPREADSHEET_COLUMNS: list[str] = [
     "Timestamp",
     "Run name",
     "Author",
-    "Dataset",
-    "Predictions path",
+    "Dataset name",
+    "GT hash",
     "Scorer version",
     "Scorer config",
     "Intended task",
@@ -63,10 +70,10 @@ SPREADSHEET_COLUMNS: list[str] = [
     "Total GT objects",
     "Matched GT objects",
     "Total predictions",
-    "Matched predictions",
     "Detection recall",
+    # --- Predictions archive ---
+    "Predictions (Drive)",
     # --- Free text ---
-    "Tags",
     "Notes",
 ]
 
@@ -78,7 +85,7 @@ def load_creds(path: Path | None = None) -> dict[str, Any]:
     """Load and return the credentials dict.
 
     Search order (first found wins):
-      1. Explicitly supplied `path`
+      1. Explicitly supplied ``path``
       2. ``~/.eval_rangefinder/creds.json``
       3. ``./creds.json`` in the current working directory
     """
@@ -99,16 +106,90 @@ def load_creds(path: Path | None = None) -> dict[str, Any]:
     )
 
 
+# ---------------------------------------------------------------------------
+# Google Drive upload
+# ---------------------------------------------------------------------------
+
+
+def upload_predictions_zip(
+    pred_dir: Path,
+    run_name: str,
+    drive_folder_id: str,
+    service_account_info: dict[str, Any],
+) -> str:
+    """Zip the predictions folder and upload it to a shared Drive folder.
+
+    Returns the ``webViewLink`` of the uploaded file so it can be stored in
+    the spreadsheet.  The file is readable by anyone who has access to the
+    parent folder (folder-level sharing is expected to be set up by the admin).
+
+    Parameters
+    ----------
+    pred_dir:
+        Local folder containing prediction JSON files.
+    run_name:
+        Used to name the uploaded zip: ``{run_name}_predictions.zip``.
+    drive_folder_id:
+        ID of the target Drive folder (from the folder's URL).
+    service_account_info:
+        Service account JSON key dict (same one used for Sheets auth).
+    """
+    try:
+        from google.oauth2.service_account import Credentials
+        from googleapiclient.discovery import build
+        from googleapiclient.http import MediaFileUpload
+    except ImportError as exc:
+        raise ImportError(
+            "google-api-python-client is required for Drive upload. "
+            "Run: uv add google-api-python-client"
+        ) from exc
+
+    scopes = [
+        "https://www.googleapis.com/auth/drive.file",
+    ]
+    creds = Credentials.from_service_account_info(service_account_info, scopes=scopes)
+    service = build("drive", "v3", credentials=creds, cache_discovery=False)
+
+    # Create zip in a temp file
+    with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as tmp:
+        tmp_path = Path(tmp.name)
+
+    try:
+        with zipfile.ZipFile(tmp_path, "w", zipfile.ZIP_DEFLATED) as zf:
+            for json_file in sorted(pred_dir.glob("*.json")):
+                zf.write(json_file, json_file.name)
+
+        file_metadata: dict[str, Any] = {
+            "name": f"{run_name}_predictions.zip",
+            "parents": [drive_folder_id],
+        }
+        media = MediaFileUpload(str(tmp_path), mimetype="application/zip", resumable=False)
+        uploaded = (
+            service.files()
+            .create(body=file_metadata, media_body=media, fields="id,webViewLink")
+            .execute()
+        )
+    finally:
+        tmp_path.unlink(missing_ok=True)
+
+    return uploaded.get("webViewLink", "")
+
+
+# ---------------------------------------------------------------------------
+# Spreadsheet row
+# ---------------------------------------------------------------------------
+
+
 def _make_row(
     run_name: str,
     author: str,
-    dataset: str,
-    pred_dir: str,
+    dataset_name: str,
+    gt_hash: str,
     scorer_version: str,
     scorer_config: str,
     intended_task: str,
     result_dict: dict[str, Any],
-    tags: str,
+    predictions_link: str,
     notes: str,
 ) -> list[Any]:
     """Build a flat row matching SPREADSHEET_COLUMNS order."""
@@ -125,8 +206,8 @@ def _make_row(
         datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
         run_name,
         author,
-        dataset,
-        pred_dir,
+        dataset_name,
+        gt_hash,
         scorer_version,
         scorer_config,
         intended_task,
@@ -148,10 +229,10 @@ def _make_row(
         _v(d.get("total_gt_all")),
         _v(d.get("matched_gt_all")),
         _v(d.get("total_pred_all")),
-        _v(d.get("matched_pred_all")),
         _v(d.get("detection_recall_all")),
+        # Predictions archive
+        predictions_link,
         # Free text
-        tags,
         notes,
     ]
 
@@ -159,13 +240,13 @@ def _make_row(
 def append_row(
     run_name: str,
     author: str,
-    dataset: str,
-    pred_dir: str,
+    dataset_name: str,
+    gt_hash: str,
     scorer_version: str,
     scorer_config: str,
     intended_task: str,
     result_dict: dict[str, Any],
-    tags: str,
+    predictions_link: str,
     notes: str,
     spreadsheet_id: str,
     service_account_info: dict[str, Any],
@@ -174,13 +255,6 @@ def append_row(
     """Append one result row to the shared Google Spreadsheet.
 
     Returns the URL of the spreadsheet for display.
-
-    Raises
-    ------
-    ImportError
-        If `gspread` or `google-auth` are not installed.
-    gspread.exceptions.SpreadsheetNotFound
-        If the spreadsheet ID is wrong or the service account has no access.
     """
     try:
         import gspread
@@ -200,58 +274,30 @@ def append_row(
 
     spreadsheet = client.open_by_key(spreadsheet_id)
 
-    # Get or create the worksheet
     try:
         ws = spreadsheet.worksheet(worksheet_name)
     except gspread.WorksheetNotFound:
-        ws = spreadsheet.add_worksheet(title=worksheet_name, rows=1000, cols=len(SPREADSHEET_COLUMNS))
-        ws.append_row(SPREADSHEET_COLUMNS, value_input_option="USER_ENTERED")
+        ws = spreadsheet.add_worksheet(
+            title=worksheet_name, rows=1000, cols=len(SPREADSHEET_COLUMNS)
+        )
+
+    # Ensure header row exists (idempotent)
+    first_row = ws.row_values(1)
+    if not first_row or first_row[0] != "Timestamp":
+        ws.insert_row(SPREADSHEET_COLUMNS, index=1, value_input_option="USER_ENTERED")
 
     row = _make_row(
         run_name=run_name,
         author=author,
-        dataset=dataset,
-        pred_dir=pred_dir,
+        dataset_name=dataset_name,
+        gt_hash=gt_hash,
         scorer_version=scorer_version,
         scorer_config=scorer_config,
         intended_task=intended_task,
         result_dict=result_dict,
-        tags=tags,
+        predictions_link=predictions_link,
         notes=notes,
     )
     ws.append_row(row, value_input_option="USER_ENTERED")
 
     return f"https://docs.google.com/spreadsheets/d/{spreadsheet_id}"
-
-
-def ensure_header_row(
-    spreadsheet_id: str,
-    service_account_info: dict[str, Any],
-    worksheet_name: str = "Results",
-) -> None:
-    """Ensure the header row exists in the worksheet (idempotent).
-
-    Safe to call multiple times — only writes the header if row 1 is empty.
-    """
-    try:
-        import gspread
-        from google.oauth2.service_account import Credentials
-    except ImportError:
-        return
-
-    scopes = [
-        "https://www.googleapis.com/auth/spreadsheets",
-        "https://www.googleapis.com/auth/drive.file",
-    ]
-    creds = Credentials.from_service_account_info(service_account_info, scopes=scopes)
-    client = gspread.authorize(creds)
-    spreadsheet = client.open_by_key(spreadsheet_id)
-
-    try:
-        ws = spreadsheet.worksheet(worksheet_name)
-    except gspread.WorksheetNotFound:
-        ws = spreadsheet.add_worksheet(title=worksheet_name, rows=1000, cols=len(SPREADSHEET_COLUMNS))
-
-    first_row = ws.row_values(1)
-    if not first_row or first_row[0] != "Timestamp":
-        ws.insert_row(SPREADSHEET_COLUMNS, index=1, value_input_option="USER_ENTERED")

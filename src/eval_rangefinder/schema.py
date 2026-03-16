@@ -4,6 +4,8 @@ Label format specification for the rangefinder evaluation system.
 Version history
 ---------------
 1  Initial version — bbox, distance, optional confidence fields.
+     Field name: "class" (reserved keyword in Python, caused aliasing friction).
+2  Renamed "class" → "class_name" throughout the JSON format.
 
 Design notes
 ------------
@@ -26,7 +28,7 @@ from typing import Any, Optional
 
 from pydantic import BaseModel, Field, model_validator
 
-LABEL_FORMAT_VERSION: int = 1
+LABEL_FORMAT_VERSION: int = 2
 
 VALID_CLASSES: frozenset[str] = frozenset({"person", "vehicle", "building"})
 
@@ -51,14 +53,10 @@ class ObjectLabel(BaseModel):
     compatibility) and will be preserved on round-trip serialization.
     """
 
-    model_config = {"populate_by_name": True, "extra": "allow"}
+    model_config = {"extra": "allow"}
 
     object_id: str = Field(..., description="Unique identifier within this frame")
-    class_name: str = Field(
-        ...,
-        alias="class",
-        description="Object class: person | vehicle | building",
-    )
+    class_name: str = Field(..., description="Object class: person | vehicle | building")
     bbox: BBox
     distance_m: float = Field(..., gt=0.0, description="Distance in meters")
 
@@ -80,14 +78,9 @@ class ObjectLabel(BaseModel):
     def _validate_class(self) -> "ObjectLabel":
         if self.class_name not in VALID_CLASSES:
             raise ValueError(
-                f"Unknown class '{self.class_name}'. Must be one of {sorted(VALID_CLASSES)}."
+                f"Unknown class_name '{self.class_name}'. Must be one of {sorted(VALID_CLASSES)}."
             )
         return self
-
-    def model_dump_json_compat(self) -> dict[str, Any]:
-        """Serialize to a dict using 'class' as the key (not 'class_name')."""
-        data = self.model_dump(by_alias=True, exclude_none=True)
-        return data
 
 
 class FrameLabel(BaseModel):
@@ -108,7 +101,9 @@ class FrameLabel(BaseModel):
         if self.format_version != LABEL_FORMAT_VERSION:
             raise ValueError(
                 f"Unsupported format_version {self.format_version}. "
-                f"This tool supports version {LABEL_FORMAT_VERSION}."
+                f"This tool supports version {LABEL_FORMAT_VERSION}. "
+                f"If you have version 1 files, rename the 'class' field to 'class_name' "
+                f"and update format_version to 2."
             )
         return self
 
@@ -123,14 +118,6 @@ class FrameLabel(BaseModel):
 
     def to_file(self, path: Path) -> None:
         path.write_text(
-            json.dumps(self._to_serializable(), indent=2, ensure_ascii=False),
+            json.dumps(self.model_dump(exclude_none=True), indent=2, ensure_ascii=False),
             encoding="utf-8",
         )
-
-    def _to_serializable(self) -> dict[str, Any]:
-        data = self.model_dump(by_alias=True, exclude_none=True)
-        # Replace 'class_name' key with 'class' in each object
-        for obj in data.get("objects", []):
-            if "class_name" in obj:
-                obj["class"] = obj.pop("class_name")
-        return data
