@@ -65,6 +65,9 @@ SPREADSHEET_COLUMNS: list[str] = [
     "RelErr_vehicle",
     "RelErr_building",
     # --- Dataset coverage ---
+    "GT files",
+    "Prediction files",
+    "Matched files",
     "Total GT objects",
     "Matched GT objects",
     "Total predictions",
@@ -197,6 +200,9 @@ def _make_row(
         _v(d.get("RelErr_vehicle")),
         _v(d.get("RelErr_building")),
         # Coverage
+        _v(d.get("gt_files")),
+        _v(d.get("pred_files")),
+        _v(d.get("matched_files")),
         _v(d.get("total_gt_all")),
         _v(d.get("matched_gt_all")),
         _v(d.get("total_pred_all")),

@@ -140,6 +140,9 @@ class ScorerResult:
             "gt_only_files": self.gt_only_files,
             "pred_only_files": self.pred_only_files,
             "skipped_files": self.skipped_files,
+            # Derived file counts for spreadsheet columns
+            "gt_files": self.matched_files + self.gt_only_files,
+            "pred_files": self.matched_files + self.pred_only_files,
         }
         for cls, m in self.per_class.items():
             d[f"AP_{cls}"] = m.ap
