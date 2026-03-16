@@ -37,7 +37,6 @@ from rich.panel import Panel
 from .scorer import CONFIGS, SCORER_VERSION, Scorer, print_results_table
 from .sheets import (
     DEFAULT_CREDS_PATH,
-    FALLBACK_CREDS_PATH,
     append_row,
     load_creds,
     upload_predictions_zip,
@@ -222,7 +221,7 @@ def main() -> None:
         console.print(f"[red]{exc}[/red]")
         console.print(
             f"[dim]Copy [bold]creds.json.example[/bold] to "
-            f"[bold]{DEFAULT_CREDS_PATH}[/bold] or [bold]{FALLBACK_CREDS_PATH}[/bold] "
+            f"[bold]{DEFAULT_CREDS_PATH}[/bold] (or the project root) "
             "and fill in your details.[/dim]"
         )
         sys.exit(1)
